@@ -3,7 +3,6 @@ import copy
 import json
 import os
 import random
-import time
 from pathlib import Path
 
 import httpx
@@ -55,6 +54,15 @@ def health():
 
 @app.post("/generate")
 def generate(req: GenerateRequest, authorization: str | None = Header(default=None)):
+    """Submit a generation job and return immediately with a prompt_id to poll.
+
+    Deliberately async rather than blocking until the image is ready: a full
+    (non-fast) generation routinely takes longer than Runpod's HTTP proxy
+    will hold a single request open, which drops the connection out from
+    under a synchronous call even though the job keeps running server-side.
+    Poll GET /result/{prompt_id} instead. This also suits bulk generation
+    better — submit many jobs without holding a connection open per image.
+    """
     check_auth(authorization)
 
     workflow = json.loads(WORKFLOW_PATH.read_text())
@@ -71,26 +79,26 @@ def generate(req: GenerateRequest, authorization: str | None = Header(default=No
 
     submit = httpx.post(f"{COMFY_URL}/prompt", json={"prompt": workflow}, timeout=30)
     submit.raise_for_status()
-    prompt_id = submit.json()["prompt_id"]
+    return {"prompt_id": submit.json()["prompt_id"]}
 
-    deadline = time.monotonic() + 300
-    history = None
-    while time.monotonic() < deadline:
-        r = httpx.get(f"{COMFY_URL}/history/{prompt_id}", timeout=10)
-        r.raise_for_status()
-        body = r.json()
-        if prompt_id in body:
-            history = body[prompt_id]
-            break
-        time.sleep(1)
 
-    if history is None:
-        raise HTTPException(status_code=504, detail="generation timed out")
+@app.get("/result/{prompt_id}")
+def result(prompt_id: str, authorization: str | None = Header(default=None)):
+    check_auth(authorization)
+
+    r = httpx.get(f"{COMFY_URL}/history/{prompt_id}", timeout=10)
+    r.raise_for_status()
+    body = r.json()
+
+    if prompt_id not in body:
+        return {"status": "pending"}
+
+    history = body[prompt_id]
 
     images = []
     for node_output in history["outputs"].values():
         for img in node_output.get("images", []):
-            r = httpx.get(
+            view = httpx.get(
                 f"{COMFY_URL}/view",
                 params={
                     "filename": img["filename"],
@@ -99,10 +107,10 @@ def generate(req: GenerateRequest, authorization: str | None = Header(default=No
                 },
                 timeout=30,
             )
-            r.raise_for_status()
-            images.append(base64.b64encode(r.content).decode())
+            view.raise_for_status()
+            images.append(base64.b64encode(view.content).decode())
 
     if not images:
         raise HTTPException(status_code=500, detail="no images in comfyui output")
 
-    return {"image_b64": images[0], "images_b64": images}
+    return {"status": "done", "image_b64": images[0], "images_b64": images}
