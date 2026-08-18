@@ -4,7 +4,7 @@ set -euo pipefail
 COMFY_DIR="/workspace/ComfyUI"
 MODELS_DIR="$COMFY_DIR/models"
 
-mkdir -p "$MODELS_DIR/diffusion_models" "$MODELS_DIR/text_encoders" "$MODELS_DIR/vae"
+mkdir -p "$MODELS_DIR/diffusion_models" "$MODELS_DIR/text_encoders" "$MODELS_DIR/vae" "$MODELS_DIR/loras"
 
 download_if_missing() {
   local repo="$1" file="$2" dest="$3"
@@ -28,6 +28,10 @@ download_if_missing "Comfy-Org/Qwen-Image_ComfyUI" \
 download_if_missing "Comfy-Org/Qwen-Image_ComfyUI" \
   "split_files/vae/qwen_image_vae.safetensors" \
   "$MODELS_DIR/vae/qwen_image_vae.safetensors"
+
+download_if_missing "lightx2v/Qwen-Image-2512-Lightning" \
+  "Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors" \
+  "$MODELS_DIR/loras/Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors"
 
 echo "Starting ComfyUI on :8188"
 cd "$COMFY_DIR"

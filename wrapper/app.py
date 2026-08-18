@@ -2,6 +2,7 @@ import base64
 import copy
 import json
 import os
+import random
 import time
 from pathlib import Path
 
@@ -13,18 +14,28 @@ COMFY_URL = "http://127.0.0.1:8188"
 WORKFLOW_PATH = Path(__file__).parent / "workflow_api.json"
 API_TOKEN = os.environ["WRAPPER_API_TOKEN"]
 
-PROMPT_NODE_ID = os.environ.get("WORKFLOW_PROMPT_NODE_ID", "6")
-LATENT_NODE_ID = os.environ.get("WORKFLOW_LATENT_NODE_ID", "58")
-SEED_NODE_ID = os.environ.get("WORKFLOW_SEED_NODE_ID", "3")
+# Node IDs from the exported Qwen-Image-2512 workflow (wrapper/workflow_api.json).
+POSITIVE_PROMPT_NODE_ID = "238:227"
+NEGATIVE_PROMPT_NODE_ID = "238:228"
+LATENT_NODE_ID = "238:232"
+SEED_NODE_ID = "238:230"
+LIGHTNING_LORA_SWITCH_NODE_ID = "238:229"
+
+DEFAULT_NEGATIVE_PROMPT = (
+    "低分辨率，低画质，肢体畸形，手指畸形，画面过饱和，蜡像感，"
+    "人脸无细节，过度光滑，画面具有AI感。构图混乱。文字模糊，扭曲"
+)
 
 app = FastAPI()
 
 
 class GenerateRequest(BaseModel):
     prompt: str
+    negative_prompt: str = DEFAULT_NEGATIVE_PROMPT
     width: int = 1328
     height: int = 1328
     seed: int | None = None
+    fast: bool = False  # use the 4-step Lightning LoRA for speed over quality
 
 
 def check_auth(authorization: str | None) -> None:
@@ -49,11 +60,14 @@ def generate(req: GenerateRequest, authorization: str | None = Header(default=No
     workflow = json.loads(WORKFLOW_PATH.read_text())
     workflow = copy.deepcopy(workflow)
 
-    workflow[PROMPT_NODE_ID]["inputs"]["text"] = req.prompt
+    workflow[POSITIVE_PROMPT_NODE_ID]["inputs"]["text"] = req.prompt
+    workflow[NEGATIVE_PROMPT_NODE_ID]["inputs"]["text"] = req.negative_prompt
     workflow[LATENT_NODE_ID]["inputs"]["width"] = req.width
     workflow[LATENT_NODE_ID]["inputs"]["height"] = req.height
-    if req.seed is not None:
-        workflow[SEED_NODE_ID]["inputs"]["seed"] = req.seed
+    workflow[SEED_NODE_ID]["inputs"]["seed"] = (
+        req.seed if req.seed is not None else random.randint(0, 2**32 - 1)
+    )
+    workflow[LIGHTNING_LORA_SWITCH_NODE_ID]["inputs"]["value"] = req.fast
 
     submit = httpx.post(f"{COMFY_URL}/prompt", json={"prompt": workflow}, timeout=30)
     submit.raise_for_status()
